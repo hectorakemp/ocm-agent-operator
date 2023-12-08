@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 func buildOCMAgentPodDisruptionBudget(ocmAgent ocmagentv1alpha1.OcmAgent) *v1.PodDisruptionBudget {
@@ -38,6 +39,13 @@ func buildOCMAgentPodDisruptionBudget(ocmAgent ocmagentv1alpha1.OcmAgent) *v1.Po
 // ensurePodDisruptionBudget ensures that an OCMAgent PDB exists on the cluster
 // and that its configuration matches what is expected.
 func (o *ocmAgentHandler) ensurePodDisruptionBudget(ocmAgent ocmagentv1alpha1.OcmAgent) error {
+	var namespacedName types.NamespacedName
+	if ocmAgent.Spec.FleetMode {
+		namespacedName = oah.BuildNamespacedName(ocmAgent.Name + oah.OCMFleetAgentNetworkPolicySuffix)
+	} else {
+		namespacedName = oah.BuildNamespacedName(ocmAgent.Name + oah.OCMAgentNetworkPolicySuffix)
+	}
+	o.Log.Info("ensuring poddisruptionbudget exists", "resource", namespacedName.String())
 	pdb := buildOCMAgentPodDisruptionBudget(ocmAgent)
 	foundPDB := &v1.PodDisruptionBudget{}
 
@@ -46,8 +54,14 @@ func (o *ocmAgentHandler) ensurePodDisruptionBudget(ocmAgent ocmagentv1alpha1.Oc
 		Name: pdb.Name, Namespace: pdb.Namespace}, foundPDB); err != nil {
 
 		if errors.IsNotFound(err) {
+			// Set the controller reference if needed
+			if err := controllerutil.SetControllerReference(&ocmAgent, pdb, o.Scheme); err != nil {
+				return err
+			}
+
 			o.Log.Info("Creating a new Pod Disruption Budget", "PDB.Namespace", pdb.Namespace, "PDB.Name", pdb.Name)
 			err = o.Client.Create(context.TODO(), pdb)
+
 			if err != nil {
 				return err
 			}
